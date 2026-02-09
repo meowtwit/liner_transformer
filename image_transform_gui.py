@@ -16,7 +16,7 @@ class ImageTransformGUI:
     def __init__(self, root):
         self.root = root
         self.root.title("画像行列変換ツール - Matrix Transform Studio")
-        self.root.geometry("1400x900")
+        self.root.geometry("1500x900")
         self.root.configure(bg='#2b2b2b')
 
         # 変数の初期化
@@ -25,10 +25,18 @@ class ImageTransformGUI:
         self.display_image = None
         self.image_path = None
 
-        # 変換行列の初期化（単位行列）
-        self.transform_matrix = np.eye(3)
+        # 変換順序の管理: リストの順番＝適用順（先頭が最初に適用）
+        self.transform_order = ['scale', 'rotation', 'shear']
 
-        # ビューポート制御（パン・ズーム用）
+        # 各変換行列（表示用に個別管理）
+        self.matrices = {
+            'scale': np.eye(3),
+            'rotation': np.eye(3),
+            'shear': np.eye(3),
+        }
+        self.transform_matrix = np.eye(3)  # 合成結果
+
+        # ビューポート制御
         self.view_offset_x = 0
         self.view_offset_y = 0
         self.view_zoom = 1.0
@@ -38,32 +46,54 @@ class ImageTransformGUI:
         # UIの構築
         self.setup_ui()
 
+        # 初期行列テキストを表示
+        self.update_all_matrix_labels()
+
+    # ================================================================
+    # UI構築
+    # ================================================================
+
     def setup_ui(self):
-        """UIのセットアップ"""
-        # メインフレーム
         main_frame = tk.Frame(self.root, bg='#2b2b2b')
         main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 
-        # 左パネル（コントロール）
-        left_panel = tk.Frame(main_frame, bg='#363636', relief=tk.RAISED, borderwidth=2)
-        left_panel.pack(side=tk.LEFT, fill=tk.BOTH, padx=(0, 5))
+        # 左パネル（コントロール） — スクロール対応
+        left_panel = tk.Frame(main_frame, bg='#363636', relief=tk.RAISED,
+                             borderwidth=2, width=340)
+        left_panel.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 5))
+        left_panel.pack_propagate(False)
+
+        left_canvas = tk.Canvas(left_panel, bg='#363636', highlightthickness=0)
+        left_scrollbar = tk.Scrollbar(left_panel, orient=tk.VERTICAL,
+                                     command=left_canvas.yview)
+        self.left_content = tk.Frame(left_canvas, bg='#363636')
+
+        self.left_content.bind("<Configure>",
+            lambda e: left_canvas.configure(scrollregion=left_canvas.bbox("all")))
+        left_canvas.create_window((0, 0), window=self.left_content, anchor=tk.NW)
+        left_canvas.configure(yscrollcommand=left_scrollbar.set)
+
+        left_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        left_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        # マウスホイールで左パネルをスクロール
+        def _on_left_scroll(event):
+            left_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        left_canvas.bind("<MouseWheel>", _on_left_scroll)
+        self.left_content.bind("<MouseWheel>", _on_left_scroll)
+
+        self.setup_control_panel(self.left_content)
 
         # 右パネル（画像表示）
-        right_panel = tk.Frame(main_frame, bg='#363636', relief=tk.RAISED, borderwidth=2)
+        right_panel = tk.Frame(main_frame, bg='#363636', relief=tk.RAISED,
+                              borderwidth=2)
         right_panel.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=(5, 0))
-
-        # ===== 左パネルの内容 =====
-        self.setup_control_panel(left_panel)
-
-        # ===== 右パネルの内容 =====
         self.setup_display_panel(right_panel)
 
     def setup_control_panel(self, parent):
-        """コントロールパネルのセットアップ"""
-        # ヘッダー
         header = tk.Label(parent, text="変換コントロール",
                          font=('Arial', 16, 'bold'), bg='#363636', fg='#ffffff')
-        header.pack(pady=10)
+        header.pack(pady=10, fill=tk.X)
 
         # ファイル操作
         file_frame = tk.LabelFrame(parent, text="ファイル",
@@ -71,692 +101,771 @@ class ImageTransformGUI:
                                   fg='#ffffff', padx=10, pady=10)
         file_frame.pack(fill=tk.X, padx=10, pady=5)
 
-        btn_load = tk.Button(file_frame, text="📁 画像を開く",
-                           command=self.load_image, bg='#4CAF50', fg='black',
-                           font=('Arial', 10), relief=tk.FLAT, padx=20, pady=5)
-        btn_load.pack(fill=tk.X, pady=2)
+        tk.Button(file_frame, text="画像を開く",
+                 command=self.load_image, bg='#4CAF50', fg='black',
+                 font=('Arial', 10), relief=tk.FLAT, padx=20, pady=5
+                 ).pack(fill=tk.X, pady=2)
+        tk.Button(file_frame, text="画像を保存",
+                 command=self.save_image, bg='#2196F3', fg='black',
+                 font=('Arial', 10), relief=tk.FLAT, padx=20, pady=5
+                 ).pack(fill=tk.X, pady=2)
 
-        btn_save = tk.Button(file_frame, text="💾 画像を保存",
-                           command=self.save_image, bg='#2196F3', fg='black',
-                           font=('Arial', 10), relief=tk.FLAT, padx=20, pady=5)
-        btn_save.pack(fill=tk.X, pady=2)
-
-        # スケール変換
+        # 各変換パラメータ
         self.setup_scale_controls(parent)
-
-        # 回転変換
         self.setup_rotation_controls(parent)
-
-        # シアー変換
         self.setup_shear_controls(parent)
 
-        # カスタム行列
-        self.setup_matrix_controls(parent)
+        # 適用順序コントロール
+        self.setup_order_controls(parent)
 
-        # リセットボタン
-        btn_reset = tk.Button(parent, text="🔄 すべてリセット",
-                            command=self.reset_all, bg='#f44336', fg='black',
-                            font=('Arial', 12, 'bold'), relief=tk.FLAT,
-                            padx=20, pady=10)
-        btn_reset.pack(fill=tk.X, padx=10, pady=10)
+        # 合成結果行列
+        self.setup_combined_matrix_display(parent)
+
+        # リセット
+        tk.Button(parent, text="すべてリセット",
+                 command=self.reset_all, bg='#f44336', fg='black',
+                 font=('Arial', 12, 'bold'), relief=tk.FLAT,
+                 padx=20, pady=10).pack(fill=tk.X, padx=10, pady=10)
 
         # グリッド表示オプション
         self.show_grid = tk.BooleanVar(value=True)
-        chk_grid = tk.Checkbutton(parent, text="グリッド表示",
-                                 variable=self.show_grid, command=self.update_display,
-                                 bg='#363636', fg='#ffffff', selectcolor='#2b2b2b',
-                                 font=('Arial', 10))
-        chk_grid.pack(pady=5)
+        tk.Checkbutton(parent, text="グリッド表示",
+                      variable=self.show_grid, command=self.update_display,
+                      bg='#363636', fg='#ffffff', selectcolor='#2b2b2b',
+                      font=('Arial', 10)).pack(pady=5)
 
+    # ---------- スケール ----------
     def setup_scale_controls(self, parent):
-        """スケール変換コントロール"""
-        frame = tk.LabelFrame(parent, text="スケール変換",
+        frame = tk.LabelFrame(parent, text="[S] スケール変換",
                              font=('Arial', 10, 'bold'), bg='#363636',
-                             fg='#ffffff', padx=10, pady=10)
-        frame.pack(fill=tk.X, padx=10, pady=5)
+                             fg='#4FC3F7', padx=10, pady=8)
+        frame.pack(fill=tk.X, padx=10, pady=4)
 
-        # X方向スケール
-        tk.Label(frame, text="X軸スケール:", bg='#363636',
-                fg='#ffffff', font=('Arial', 9)).pack(anchor=tk.W)
-
+        tk.Label(frame, text="X:", bg='#363636', fg='#fff',
+                font=('Arial', 9)).pack(anchor=tk.W)
         self.scale_x = tk.DoubleVar(value=1.0)
-        scale_x_slider = tk.Scale(frame, from_=0.1, to=3.0, resolution=0.1,
-                                 orient=tk.HORIZONTAL, variable=self.scale_x,
-                                 command=self.on_transform_change, bg='#4a4a4a',
-                                 fg='#ffffff', highlightbackground='#363636',
-                                 troughcolor='#2b2b2b', length=250)
-        scale_x_slider.pack(fill=tk.X)
+        tk.Scale(frame, from_=0.1, to=3.0, resolution=0.05,
+                orient=tk.HORIZONTAL, variable=self.scale_x,
+                command=self.on_transform_change, bg='#4a4a4a',
+                fg='#ffffff', highlightbackground='#363636',
+                troughcolor='#2b2b2b', length=250).pack(fill=tk.X)
 
-        # Y方向スケール
-        tk.Label(frame, text="Y軸スケール:", bg='#363636',
-                fg='#ffffff', font=('Arial', 9)).pack(anchor=tk.W, pady=(10, 0))
-
+        tk.Label(frame, text="Y:", bg='#363636', fg='#fff',
+                font=('Arial', 9)).pack(anchor=tk.W)
         self.scale_y = tk.DoubleVar(value=1.0)
-        scale_y_slider = tk.Scale(frame, from_=0.1, to=3.0, resolution=0.1,
-                                 orient=tk.HORIZONTAL, variable=self.scale_y,
-                                 command=self.on_transform_change, bg='#4a4a4a',
-                                 fg='#ffffff', highlightbackground='#363636',
-                                 troughcolor='#2b2b2b', length=250)
-        scale_y_slider.pack(fill=tk.X)
+        tk.Scale(frame, from_=0.1, to=3.0, resolution=0.05,
+                orient=tk.HORIZONTAL, variable=self.scale_y,
+                command=self.on_transform_change, bg='#4a4a4a',
+                fg='#ffffff', highlightbackground='#363636',
+                troughcolor='#2b2b2b', length=250).pack(fill=tk.X)
 
-        # 等倍リセットボタン
-        btn_reset_scale = tk.Button(frame, text="1:1にリセット",
-                                   command=lambda: self.reset_scale(),
-                                   bg='#555555', fg='black', relief=tk.FLAT,
-                                   font=('Arial', 8))
-        btn_reset_scale.pack(pady=5)
+        # 個別行列入力（編集可能）
+        self.scale_matrix_text = tk.Text(frame, height=2, width=20, bg='#2b2b2b',
+            fg='#4FC3F7', font=('Courier', 10), relief=tk.FLAT, padx=5, pady=3)
+        self.scale_matrix_text.pack(fill=tk.X, pady=(4, 0))
+        tk.Button(frame, text="行列を適用", command=lambda: self.apply_matrix_input('scale'),
+                 bg='#4FC3F7', fg='black', relief=tk.FLAT,
+                 font=('Arial', 9)).pack(fill=tk.X, pady=(2, 0))
 
+    # ---------- 回転 ----------
     def setup_rotation_controls(self, parent):
-        """回転変換コントロール"""
-        frame = tk.LabelFrame(parent, text="回転変換",
+        frame = tk.LabelFrame(parent, text="[R] 回転変換",
                              font=('Arial', 10, 'bold'), bg='#363636',
-                             fg='#ffffff', padx=10, pady=10)
-        frame.pack(fill=tk.X, padx=10, pady=5)
+                             fg='#81C784', padx=10, pady=8)
+        frame.pack(fill=tk.X, padx=10, pady=4)
 
-        tk.Label(frame, text="回転角度（度）:", bg='#363636',
-                fg='#ffffff', font=('Arial', 9)).pack(anchor=tk.W)
-
+        tk.Label(frame, text="角度(度):", bg='#363636', fg='#fff',
+                font=('Arial', 9)).pack(anchor=tk.W)
         self.rotation = tk.DoubleVar(value=0.0)
-        rotation_slider = tk.Scale(frame, from_=-180, to=180, resolution=1,
-                                  orient=tk.HORIZONTAL, variable=self.rotation,
-                                  command=self.on_transform_change, bg='#4a4a4a',
-                                  fg='#ffffff', highlightbackground='#363636',
-                                  troughcolor='#2b2b2b', length=250)
-        rotation_slider.pack(fill=tk.X)
+        tk.Scale(frame, from_=-180, to=180, resolution=1,
+                orient=tk.HORIZONTAL, variable=self.rotation,
+                command=self.on_transform_change, bg='#4a4a4a',
+                fg='#ffffff', highlightbackground='#363636',
+                troughcolor='#2b2b2b', length=250).pack(fill=tk.X)
 
-        # プリセット回転ボタン
         preset_frame = tk.Frame(frame, bg='#363636')
-        preset_frame.pack(fill=tk.X, pady=5)
-
+        preset_frame.pack(fill=tk.X, pady=4)
         for angle in [90, 120, 180, 270]:
-            btn = tk.Button(preset_frame, text=f"{angle}°",
-                          command=lambda a=angle: self.set_rotation(a),
-                          bg='#555555', fg='black', relief=tk.FLAT,
-                          font=('Arial', 8), width=5)
-            btn.pack(side=tk.LEFT, padx=2)
+            tk.Button(preset_frame, text=f"{angle}°",
+                     command=lambda a=angle: self.set_rotation(a),
+                     bg='#555555', fg='black', relief=tk.FLAT,
+                     font=('Arial', 8), width=5).pack(side=tk.LEFT, padx=2)
 
+        self.rotation_matrix_text = tk.Text(frame, height=2, width=20, bg='#2b2b2b',
+            fg='#81C784', font=('Courier', 10), relief=tk.FLAT, padx=5, pady=3)
+        self.rotation_matrix_text.pack(fill=tk.X, pady=(4, 0))
+        tk.Button(frame, text="行列を適用", command=lambda: self.apply_matrix_input('rotation'),
+                 bg='#81C784', fg='black', relief=tk.FLAT,
+                 font=('Arial', 9)).pack(fill=tk.X, pady=(2, 0))
+
+    # ---------- シアー ----------
     def setup_shear_controls(self, parent):
-        """シアー変換コントロール"""
-        frame = tk.LabelFrame(parent, text="シアー変換（せん断）",
+        frame = tk.LabelFrame(parent, text="[H] シアー変換（せん断）",
                              font=('Arial', 10, 'bold'), bg='#363636',
-                             fg='#ffffff', padx=10, pady=10)
-        frame.pack(fill=tk.X, padx=10, pady=5)
+                             fg='#FFB74D', padx=10, pady=8)
+        frame.pack(fill=tk.X, padx=10, pady=4)
 
-        # X方向シアー
-        tk.Label(frame, text="X方向シアー:", bg='#363636',
-                fg='#ffffff', font=('Arial', 9)).pack(anchor=tk.W)
-
+        tk.Label(frame, text="X方向:", bg='#363636', fg='#fff',
+                font=('Arial', 9)).pack(anchor=tk.W)
         self.shear_x = tk.DoubleVar(value=0.0)
-        shear_x_slider = tk.Scale(frame, from_=-2.0, to=2.0, resolution=0.1,
-                                 orient=tk.HORIZONTAL, variable=self.shear_x,
-                                 command=self.on_transform_change, bg='#4a4a4a',
-                                 fg='#ffffff', highlightbackground='#363636',
-                                 troughcolor='#2b2b2b', length=250)
-        shear_x_slider.pack(fill=tk.X)
+        tk.Scale(frame, from_=-2.0, to=2.0, resolution=0.05,
+                orient=tk.HORIZONTAL, variable=self.shear_x,
+                command=self.on_transform_change, bg='#4a4a4a',
+                fg='#ffffff', highlightbackground='#363636',
+                troughcolor='#2b2b2b', length=250).pack(fill=tk.X)
 
-        # Y方向シアー
-        tk.Label(frame, text="Y方向シアー:", bg='#363636',
-                fg='#ffffff', font=('Arial', 9)).pack(anchor=tk.W, pady=(10, 0))
-
+        tk.Label(frame, text="Y方向:", bg='#363636', fg='#fff',
+                font=('Arial', 9)).pack(anchor=tk.W)
         self.shear_y = tk.DoubleVar(value=0.0)
-        shear_y_slider = tk.Scale(frame, from_=-2.0, to=2.0, resolution=0.1,
-                                 orient=tk.HORIZONTAL, variable=self.shear_y,
-                                 command=self.on_transform_change, bg='#4a4a4a',
-                                 fg='#ffffff', highlightbackground='#363636',
-                                 troughcolor='#2b2b2b', length=250)
-        shear_y_slider.pack(fill=tk.X)
+        tk.Scale(frame, from_=-2.0, to=2.0, resolution=0.05,
+                orient=tk.HORIZONTAL, variable=self.shear_y,
+                command=self.on_transform_change, bg='#4a4a4a',
+                fg='#ffffff', highlightbackground='#363636',
+                troughcolor='#2b2b2b', length=250).pack(fill=tk.X)
 
-    def setup_matrix_controls(self, parent):
-        """カスタム行列コントロール"""
-        frame = tk.LabelFrame(parent, text="カスタム変換行列",
+        self.shear_matrix_text = tk.Text(frame, height=2, width=20, bg='#2b2b2b',
+            fg='#FFB74D', font=('Courier', 10), relief=tk.FLAT, padx=5, pady=3)
+        self.shear_matrix_text.pack(fill=tk.X, pady=(4, 0))
+        tk.Button(frame, text="行列を適用", command=lambda: self.apply_matrix_input('shear'),
+                 bg='#FFB74D', fg='black', relief=tk.FLAT,
+                 font=('Arial', 9)).pack(fill=tk.X, pady=(2, 0))
+
+    # ---------- 適用順序 ----------
+    def setup_order_controls(self, parent):
+        frame = tk.LabelFrame(parent, text="適用順序（上から順に適用）",
                              font=('Arial', 10, 'bold'), bg='#363636',
-                             fg='#ffffff', padx=10, pady=10)
-        frame.pack(fill=tk.X, padx=10, pady=5)
+                             fg='#ffffff', padx=10, pady=8)
+        frame.pack(fill=tk.X, padx=10, pady=4)
 
-        tk.Label(frame, text="現在の変換行列:", bg='#363636',
-                fg='#ffffff', font=('Arial', 9)).pack(anchor=tk.W)
+        self.order_frame = tk.Frame(frame, bg='#363636')
+        self.order_frame.pack(fill=tk.X)
+
+        self.rebuild_order_ui()
+
+    def rebuild_order_ui(self):
+        """適用順序UIを再構築"""
+        for w in self.order_frame.winfo_children():
+            w.destroy()
+
+        NAMES = {
+            'scale': ('[S] スケール', '#4FC3F7'),
+            'rotation': ('[R] 回転', '#81C784'),
+            'shear': ('[H] シアー', '#FFB74D'),
+        }
+
+        for i, key in enumerate(self.transform_order):
+            row = tk.Frame(self.order_frame, bg='#363636')
+            row.pack(fill=tk.X, pady=1)
+
+            # 番号
+            tk.Label(row, text=f"{i+1}.", bg='#363636', fg='#aaa',
+                    font=('Arial', 10, 'bold'), width=2).pack(side=tk.LEFT)
+
+            # ラベル
+            name, color = NAMES[key]
+            tk.Label(row, text=name, bg='#363636', fg=color,
+                    font=('Arial', 10, 'bold'), width=12, anchor=tk.W
+                    ).pack(side=tk.LEFT, padx=4)
+
+            # 上下ボタン
+            btn_frame = tk.Frame(row, bg='#363636')
+            btn_frame.pack(side=tk.RIGHT)
+
+            if i > 0:
+                tk.Button(btn_frame, text="▲", command=lambda idx=i: self.move_order(idx, -1),
+                         bg='#555555', fg='black', relief=tk.FLAT,
+                         font=('Arial', 9), width=3).pack(side=tk.LEFT, padx=1)
+            else:
+                tk.Label(btn_frame, text="   ", bg='#363636', width=3).pack(side=tk.LEFT, padx=1)
+
+            if i < len(self.transform_order) - 1:
+                tk.Button(btn_frame, text="▼", command=lambda idx=i: self.move_order(idx, 1),
+                         bg='#555555', fg='black', relief=tk.FLAT,
+                         font=('Arial', 9), width=3).pack(side=tk.LEFT, padx=1)
+            else:
+                tk.Label(btn_frame, text="   ", bg='#363636', width=3).pack(side=tk.LEFT, padx=1)
+
+    def move_order(self, index, direction):
+        """変換の適用順序を入れ替え"""
+        new_index = index + direction
+        if 0 <= new_index < len(self.transform_order):
+            self.transform_order[index], self.transform_order[new_index] = \
+                self.transform_order[new_index], self.transform_order[index]
+            self.rebuild_order_ui()
+            if self.original_image is not None:
+                self.apply_transform()
+
+    # ---------- 合成行列表示 ----------
+    def setup_combined_matrix_display(self, parent):
+        frame = tk.LabelFrame(parent, text="合成変換行列",
+                             font=('Arial', 10, 'bold'), bg='#363636',
+                             fg='#ffffff', padx=10, pady=8)
+        frame.pack(fill=tk.X, padx=10, pady=4)
 
         self.matrix_text = tk.Text(frame, height=3, width=30, bg='#2b2b2b',
                                   fg='#00ff00', font=('Courier', 9),
                                   relief=tk.FLAT, padx=5, pady=5)
-        self.matrix_text.pack(fill=tk.X, pady=5)
+        self.matrix_text.pack(fill=tk.X, pady=4)
         self.update_matrix_display()
 
-        btn_apply_matrix = tk.Button(frame, text="行列を適用",
-                                    command=self.apply_custom_matrix,
-                                    bg='#9C27B0', fg='black', relief=tk.FLAT,
-                                    font=('Arial', 9))
-        btn_apply_matrix.pack(fill=tk.X)
+        tk.Button(frame, text="行列を直接適用",
+                 command=self.apply_custom_matrix,
+                 bg='#9C27B0', fg='black', relief=tk.FLAT,
+                 font=('Arial', 9)).pack(fill=tk.X)
+
+    # ================================================================
+    # 画像表示パネル
+    # ================================================================
 
     def setup_display_panel(self, parent):
-        """画像表示パネルのセットアップ"""
-        # ヘッダー＋操作説明
         header_frame = tk.Frame(parent, bg='#363636')
         header_frame.pack(pady=10, fill=tk.X, padx=10)
+        tk.Label(header_frame, text="プレビュー",
+                font=('Arial', 16, 'bold'), bg='#363636', fg='#ffffff'
+                ).pack(side=tk.LEFT)
+        tk.Label(header_frame,
+                text="ドラッグ:移動 | スクロール:拡大縮小 | 右クリック:リセット",
+                font=('Arial', 9), bg='#363636', fg='#aaaaaa'
+                ).pack(side=tk.RIGHT, padx=10)
 
-        header = tk.Label(header_frame, text="プレビュー",
-                         font=('Arial', 16, 'bold'), bg='#363636', fg='#ffffff')
-        header.pack(side=tk.LEFT)
-
-        # 操作説明
-        help_text = tk.Label(header_frame,
-                           text="🖱️ ドラッグ:移動 | ホイール/ピンチ:拡大縮小 | 2本指回転:画像回転 | 右クリック:リセット",
-                           font=('Arial', 9), bg='#363636', fg='#aaaaaa')
-        help_text.pack(side=tk.RIGHT, padx=10)
-
-        # キャンバスフレーム
-        canvas_frame = tk.Frame(parent, bg='#2b2b2b', relief=tk.SUNKEN, borderwidth=2)
+        canvas_frame = tk.Frame(parent, bg='#2b2b2b', relief=tk.SUNKEN,
+                               borderwidth=2)
         canvas_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=(10, 0))
-
-        # キャンバス
-        self.canvas = tk.Canvas(canvas_frame, bg='#1e1e1e',
-                               highlightthickness=0)
+        self.canvas = tk.Canvas(canvas_frame, bg='#1e1e1e', highlightthickness=0)
         self.canvas.pack(fill=tk.BOTH, expand=True)
 
-        # ズームコントロールバー
         self.setup_zoom_bar(parent)
 
-        # マウスイベントのバインド
+        # マウスイベント
         self.canvas.bind("<ButtonPress-1>", self.on_mouse_press)
         self.canvas.bind("<B1-Motion>", self.on_mouse_drag)
         self.canvas.bind("<MouseWheel>", self.on_mouse_wheel)
-        self.canvas.bind("<Button-4>", self.on_mouse_wheel)  # Linux用
-        self.canvas.bind("<Button-5>", self.on_mouse_wheel)  # Linux用
-        self.canvas.bind("<Button-3>", self.reset_view)  # 右クリックでビューリセット
-
-        # タッチパッドジェスチャーのバインド（Tkバージョンにより利用可否が異なる）
+        self.canvas.bind("<Button-4>", self.on_mouse_wheel)
+        self.canvas.bind("<Button-5>", self.on_mouse_wheel)
+        self.canvas.bind("<Button-3>", self.reset_view)
+        self.canvas.bind("<Control-MouseWheel>", self.on_ctrl_scroll)
         try:
             self.canvas.bind("<Magnify>", self.on_magnify)
         except tk.TclError:
-            pass  # Magnifyイベント非対応のTkバージョン
+            pass
         try:
             self.canvas.bind("<Rotate>", self.on_rotate_gesture)
         except tk.TclError:
-            pass  # Rotateイベント非対応のTkバージョン
+            pass
 
-        # macOS: トラックパッドの2本指スクロール（ピンチ代替）
-        # Ctrl+スクロールでズーム（ブラウザと同じ操作感）
-        self.canvas.bind("<Control-MouseWheel>", self.on_ctrl_scroll)
-
-        # 初期メッセージ
         self.canvas.create_text(400, 300,
-                               text="画像を開いてください\n\n📁 左のパネルから画像を開く",
-                               font=('Arial', 16), fill='#666666',
-                               tags='placeholder')
+            text="画像を開いてください\n\n左のパネルから画像を開く",
+            font=('Arial', 16), fill='#666666', tags='placeholder')
 
     def setup_zoom_bar(self, parent):
-        """ズームコントロールバーのセットアップ"""
         zoom_bar = tk.Frame(parent, bg='#2b2b2b')
         zoom_bar.pack(fill=tk.X, padx=10, pady=(4, 10))
 
-        # 左側: ビューリセット
-        btn_fit = tk.Button(zoom_bar, text="Fit", command=self.reset_view,
-                           bg='#555555', fg='black', relief=tk.FLAT,
-                           font=('Arial', 9), width=4, padx=2)
-        btn_fit.pack(side=tk.LEFT, padx=(0, 8))
+        tk.Button(zoom_bar, text="Fit", command=self.reset_view,
+                 bg='#555555', fg='black', relief=tk.FLAT,
+                 font=('Arial', 9), width=4, padx=2).pack(side=tk.LEFT, padx=(0, 8))
 
-        # 右側にズームコントロールをまとめる
         zoom_right = tk.Frame(zoom_bar, bg='#2b2b2b')
         zoom_right.pack(side=tk.RIGHT)
 
-        # [-] ボタン
-        btn_zoom_out = tk.Button(zoom_right, text=" - ", command=self.zoom_out,
-                                bg='#555555', fg='black', relief=tk.FLAT,
-                                font=('Arial', 12, 'bold'), width=2)
-        btn_zoom_out.pack(side=tk.LEFT, padx=2)
-
-        # 縮尺プリセットボタン
+        tk.Button(zoom_right, text=" - ", command=self.zoom_out,
+                 bg='#555555', fg='black', relief=tk.FLAT,
+                 font=('Arial', 12, 'bold'), width=2).pack(side=tk.LEFT, padx=2)
         for pct in [25, 50, 100, 200]:
-            btn = tk.Button(zoom_right, text=f"{pct}%",
-                          command=lambda p=pct: self.set_zoom(p / 100.0),
-                          bg='#444444', fg='black', relief=tk.FLAT,
-                          font=('Arial', 9), width=4)
-            btn.pack(side=tk.LEFT, padx=1)
+            tk.Button(zoom_right, text=f"{pct}%",
+                     command=lambda p=pct: self.set_zoom(p / 100.0),
+                     bg='#444444', fg='black', relief=tk.FLAT,
+                     font=('Arial', 9), width=4).pack(side=tk.LEFT, padx=1)
+        tk.Button(zoom_right, text=" + ", command=self.zoom_in,
+                 bg='#555555', fg='black', relief=tk.FLAT,
+                 font=('Arial', 12, 'bold'), width=2).pack(side=tk.LEFT, padx=2)
 
-        # [+] ボタン
-        btn_zoom_in = tk.Button(zoom_right, text=" + ", command=self.zoom_in,
-                               bg='#555555', fg='black', relief=tk.FLAT,
-                               font=('Arial', 12, 'bold'), width=2)
-        btn_zoom_in.pack(side=tk.LEFT, padx=2)
-
-        # ズーム表示ラベル
         self.zoom_label = tk.Label(zoom_right, text="100%",
                                   bg='#2b2b2b', fg='#4CAF50',
                                   font=('Arial', 11, 'bold'), width=6, anchor=tk.E)
         self.zoom_label.pack(side=tk.LEFT, padx=(8, 0))
 
+    # ================================================================
+    # ファイル操作
+    # ================================================================
+
+    def load_image(self):
+        file_path = filedialog.askopenfilename(
+            title="画像を選択",
+            filetypes=[("画像ファイル", "*.png *.jpg *.jpeg *.bmp *.gif"),
+                       ("すべてのファイル", "*.*")],
+            initialfile="image.png")
+        if not file_path:
+            return
+        try:
+            self.image_path = file_path
+            self.original_image = cv2.imread(file_path, cv2.IMREAD_UNCHANGED)
+            if self.original_image is None:
+                raise ValueError("画像を読み込めませんでした")
+            if len(self.original_image.shape) == 3:
+                if self.original_image.shape[2] == 4:
+                    self.original_image = cv2.cvtColor(self.original_image, cv2.COLOR_BGRA2RGBA)
+                else:
+                    self.original_image = cv2.cvtColor(self.original_image, cv2.COLOR_BGR2RGB)
+            self.current_image = self.original_image.copy()
+            self.reset_all()
+        except Exception as e:
+            messagebox.showerror("エラー", f"画像の読み込みに失敗:\n{e}")
+
+    def save_image(self):
+        if self.current_image is None:
+            messagebox.showwarning("警告", "保存する画像がありません")
+            return
+        file_path = filedialog.asksaveasfilename(
+            title="画像を保存", defaultextension=".png",
+            filetypes=[("PNG", "*.png"), ("JPEG", "*.jpg"), ("すべて", "*.*")])
+        if not file_path:
+            return
+        try:
+            if len(self.current_image.shape) == 3:
+                if self.current_image.shape[2] == 4:
+                    out = cv2.cvtColor(self.current_image, cv2.COLOR_RGBA2BGRA)
+                else:
+                    out = cv2.cvtColor(self.current_image, cv2.COLOR_RGB2BGR)
+            else:
+                out = self.current_image
+            cv2.imwrite(file_path, out)
+            messagebox.showinfo("成功", "画像を保存しました！")
+        except Exception as e:
+            messagebox.showerror("エラー", f"保存失敗:\n{e}")
+
+    # ================================================================
+    # 変換ロジック
+    # ================================================================
+
+    def on_transform_change(self, *args):
+        if self.original_image is not None:
+            self.apply_transform()
+
+    def build_individual_matrices(self):
+        """各変換の行列を構築して保存"""
+        sx, sy = self.scale_x.get(), self.scale_y.get()
+        self.matrices['scale'] = np.array([
+            [sx, 0, 0],
+            [0, sy, 0],
+            [0, 0, 1]
+        ])
+
+        a = math.radians(self.rotation.get())
+        c, s = math.cos(a), math.sin(a)
+        self.matrices['rotation'] = np.array([
+            [c, -s, 0],
+            [s,  c, 0],
+            [0,  0, 1]
+        ])
+
+        hx, hy = self.shear_x.get(), self.shear_y.get()
+        self.matrices['shear'] = np.array([
+            [1,  hx, 0],
+            [hy,  1, 0],
+            [0,   0, 1]
+        ])
+
+    def compute_output_bounds(self, w, h, combined_linear):
+        """変換後の四隅から必要な出力サイズとオフセットを計算"""
+        corners = np.array([
+            [0, 0, 1],
+            [w, 0, 1],
+            [w, h, 1],
+            [0, h, 1]
+        ], dtype=float).T  # 3x4
+
+        transformed = combined_linear @ corners  # 3x4
+        xs = transformed[0]
+        ys = transformed[1]
+
+        min_x, max_x = xs.min(), xs.max()
+        min_y, max_y = ys.min(), ys.max()
+
+        # パディングを追加
+        pad = max(w, h) * 0.25
+        min_x -= pad
+        min_y -= pad
+        max_x += pad
+        max_y += pad
+
+        out_w = int(math.ceil(max_x - min_x))
+        out_h = int(math.ceil(max_y - min_y))
+
+        return out_w, out_h, min_x, min_y
+
+    def apply_transform(self):
+        if self.original_image is None:
+            return
+
+        h, w = self.original_image.shape[:2]
+        cx, cy = w / 2.0, h / 2.0
+
+        self.build_individual_matrices()
+
+        # 適用順序に従って行列を合成（画像中心を原点として変換）
+        to_origin = np.array([[1, 0, -cx], [0, 1, -cy], [0, 0, 1]])
+        from_origin = np.array([[1, 0, cx], [0, 1, cy], [0, 0, 1]])
+
+        # 中心基準の合成変換を構築
+        combined = np.eye(3)
+        for key in self.transform_order:
+            combined = self.matrices[key] @ combined
+
+        # 完全な変換: 中心に移動 → 変換 → 戻す
+        full = from_origin @ combined @ to_origin
+
+        # 出力サイズを動的計算
+        out_w, out_h, min_x, min_y = self.compute_output_bounds(w, h, full)
+
+        # 出力画像内に収まるよう平行移動を追加
+        offset = np.array([[1, 0, -min_x], [0, 1, -min_y], [0, 0, 1]])
+        self.transform_matrix = offset @ full
+
+        transform_2x3 = self.transform_matrix[:2, :]
+
+        try:
+            has_alpha = (len(self.original_image.shape) == 3 and
+                        self.original_image.shape[2] == 4)
+            border = (0, 0, 0, 0) if has_alpha else (200, 200, 200)
+
+            self.current_image = cv2.warpAffine(
+                self.original_image, transform_2x3,
+                (out_w, out_h),
+                flags=cv2.INTER_LINEAR,
+                borderMode=cv2.BORDER_CONSTANT,
+                borderValue=border)
+
+            self.update_all_matrix_labels()
+            self.update_matrix_display()
+            self.update_display()
+        except Exception as e:
+            print(f"変換エラー: {e}")
+
+    # ================================================================
+    # 行列表示更新
+    # ================================================================
+
+    def fmt_matrix_2x2(self, m):
+        """2x2部分を見やすく表示"""
+        return (f"{m[0,0]:8.4f}  {m[0,1]:8.4f}\n"
+                f"{m[1,0]:8.4f}  {m[1,1]:8.4f}")
+
+    def set_matrix_text(self, text_widget, content):
+        """Textウィジェットの内容を更新"""
+        text_widget.delete('1.0', tk.END)
+        text_widget.insert('1.0', content)
+
+    def update_all_matrix_labels(self):
+        self.set_matrix_text(self.scale_matrix_text, self.fmt_matrix_2x2(self.matrices['scale']))
+        self.set_matrix_text(self.rotation_matrix_text, self.fmt_matrix_2x2(self.matrices['rotation']))
+        self.set_matrix_text(self.shear_matrix_text, self.fmt_matrix_2x2(self.matrices['shear']))
+
+    def parse_2x2_text(self, text_widget):
+        """Textウィジェットから2x2行列を解析"""
+        txt = text_widget.get('1.0', tk.END).strip()
+        # パイプ文字や括弧を除去
+        txt = txt.replace('|', '').replace('[', '').replace(']', '')
+        lines = [l.strip() for l in txt.split('\n') if l.strip()]
+        if len(lines) != 2:
+            raise ValueError("2x2行列を入力してください（2行）")
+        vals = []
+        for l in lines:
+            v = [float(x) for x in l.split()]
+            if len(v) != 2:
+                raise ValueError("各行は2つの値が必要です")
+            vals.append(v)
+        return np.array(vals)
+
+    def apply_matrix_input(self, key):
+        """各変換の行列テキストを解析して適用"""
+        text_widgets = {
+            'scale': self.scale_matrix_text,
+            'rotation': self.rotation_matrix_text,
+            'shear': self.shear_matrix_text,
+        }
+        try:
+            m2x2 = self.parse_2x2_text(text_widgets[key])
+            # 3x3行列に変換
+            self.matrices[key] = np.array([
+                [m2x2[0, 0], m2x2[0, 1], 0],
+                [m2x2[1, 0], m2x2[1, 1], 0],
+                [0, 0, 1]
+            ])
+            # スライダーを行列値に同期（可能な範囲で）
+            self._sync_sliders_from_matrix(key, m2x2)
+            # 変換を再適用（スライダー経由ではなく直接）
+            self._apply_from_matrices()
+        except Exception as e:
+            messagebox.showerror("エラー", f"行列の解析に失敗:\n{e}")
+
+    def _sync_sliders_from_matrix(self, key, m2x2):
+        """行列値からスライダーを逆算して同期"""
+        if key == 'scale':
+            sx = m2x2[0, 0]
+            sy = m2x2[1, 1]
+            if 0.1 <= sx <= 3.0:
+                self.scale_x.set(round(sx, 2))
+            if 0.1 <= sy <= 3.0:
+                self.scale_y.set(round(sy, 2))
+        elif key == 'rotation':
+            # cos, sinから角度を逆算
+            cos_val = m2x2[0, 0]
+            sin_val = m2x2[1, 0]
+            angle_rad = math.atan2(sin_val, cos_val)
+            angle_deg = math.degrees(angle_rad)
+            if -180 <= angle_deg <= 180:
+                self.rotation.set(round(angle_deg))
+        elif key == 'shear':
+            hx = m2x2[0, 1]
+            hy = m2x2[1, 0]
+            if -2.0 <= hx <= 2.0:
+                self.shear_x.set(round(hx, 2))
+            if -2.0 <= hy <= 2.0:
+                self.shear_y.set(round(hy, 2))
+
+    def _apply_from_matrices(self):
+        """self.matricesの現在値をそのまま合成して変換を適用"""
+        if self.original_image is None:
+            return
+
+        h, w = self.original_image.shape[:2]
+        cx, cy = w / 2.0, h / 2.0
+
+        to_origin = np.array([[1, 0, -cx], [0, 1, -cy], [0, 0, 1]])
+        from_origin = np.array([[1, 0, cx], [0, 1, cy], [0, 0, 1]])
+
+        combined = np.eye(3)
+        for key in self.transform_order:
+            combined = self.matrices[key] @ combined
+
+        full = from_origin @ combined @ to_origin
+
+        out_w, out_h, min_x, min_y = self.compute_output_bounds(w, h, full)
+        offset = np.array([[1, 0, -min_x], [0, 1, -min_y], [0, 0, 1]])
+        self.transform_matrix = offset @ full
+
+        transform_2x3 = self.transform_matrix[:2, :]
+
+        try:
+            has_alpha = (len(self.original_image.shape) == 3 and
+                        self.original_image.shape[2] == 4)
+            border = (0, 0, 0, 0) if has_alpha else (200, 200, 200)
+
+            self.current_image = cv2.warpAffine(
+                self.original_image, transform_2x3,
+                (out_w, out_h),
+                flags=cv2.INTER_LINEAR,
+                borderMode=cv2.BORDER_CONSTANT,
+                borderValue=border)
+
+            self.update_matrix_display()
+            self.update_display()
+        except Exception as e:
+            print(f"変換エラー: {e}")
+
+    def update_matrix_display(self):
+        self.matrix_text.delete('1.0', tk.END)
+        s = "[\n"
+        for row in self.transform_matrix[:2]:
+            s += "  " + "  ".join([f"{x:8.3f}" for x in row]) + "\n"
+        s += "]"
+        self.matrix_text.insert('1.0', s)
+
+    def apply_custom_matrix(self):
+        try:
+            txt = self.matrix_text.get('1.0', tk.END)
+            lines = [l.strip() for l in txt.strip().strip('[]').split('\n') if l.strip()]
+            if len(lines) != 2:
+                raise ValueError("2行3列の行列を入力してください")
+            vals = []
+            for l in lines:
+                v = [float(x) for x in l.replace('[', '').replace(']', '').split()]
+                if len(v) != 3:
+                    raise ValueError("各行は3つの値が必要です")
+                vals.append(v)
+            custom = np.array(vals + [[0, 0, 1]])
+            if self.original_image is not None:
+                h, w = self.original_image.shape[:2]
+                out_w, out_h, min_x, min_y = self.compute_output_bounds(w, h, custom)
+                offset = np.array([[1, 0, -min_x], [0, 1, -min_y], [0, 0, 1]])
+                final = offset @ custom
+                t2x3 = final[:2, :]
+                has_alpha = (len(self.original_image.shape) == 3 and
+                            self.original_image.shape[2] == 4)
+                self.current_image = cv2.warpAffine(
+                    self.original_image, t2x3, (out_w, out_h),
+                    flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT,
+                    borderValue=(0,0,0,0) if has_alpha else (200,200,200))
+                self.transform_matrix = final
+                self.update_display()
+        except Exception as e:
+            messagebox.showerror("エラー", f"行列適用失敗:\n{e}")
+
+    # ================================================================
+    # 表示
+    # ================================================================
+
+    def update_display(self):
+        if self.current_image is None:
+            return
+
+        self.canvas.delete('all')
+        self.canvas.update()
+        cw = self.canvas.winfo_width()
+        ch = self.canvas.winfo_height()
+        if cw <= 1 or ch <= 1:
+            cw, ch = 800, 600
+
+        if self.show_grid.get():
+            self.draw_grid(cw, ch)
+
+        if len(self.current_image.shape) == 3:
+            mode = 'RGBA' if self.current_image.shape[2] == 4 else 'RGB'
+        else:
+            mode = 'L'
+        pil_image = Image.fromarray(self.current_image, mode)
+
+        iw, ih = pil_image.size
+        # 元画像のサイズを基準にスケールを計算（回転時に縮小しない）
+        if self.original_image is not None:
+            oh, ow = self.original_image.shape[:2]
+        else:
+            ow, oh = iw, ih
+        base_scale = min(cw / ow, ch / oh, 1.0) * 0.85
+        final_scale = base_scale * self.view_zoom
+
+        nw = max(int(iw * final_scale), 1)
+        nh = max(int(ih * final_scale), 1)
+        pil_image = pil_image.resize((nw, nh), Image.Resampling.LANCZOS)
+
+        self.display_image = ImageTk.PhotoImage(pil_image)
+
+        x = (cw - nw) // 2 + self.view_offset_x
+        y = (ch - nh) // 2 + self.view_offset_y
+        self.canvas.create_image(x, y, anchor=tk.NW, image=self.display_image)
+
+        pct = int(round(self.view_zoom * 100))
+        self.zoom_label.config(text=f"{pct}%")
+
+    def draw_grid(self, w, h):
+        for x in range(0, w, 50):
+            self.canvas.create_line(x, 0, x, h, fill='#333333')
+        for y in range(0, h, 50):
+            self.canvas.create_line(0, y, w, y, fill='#333333')
+        self.canvas.create_line(w//2, 0, w//2, h, fill='#4CAF50', width=2, dash=(5,5))
+        self.canvas.create_line(0, h//2, w, h//2, fill='#4CAF50', width=2, dash=(5,5))
+
+    # ================================================================
+    # ビュー操作
+    # ================================================================
+
     def zoom_in(self):
-        """ズームイン"""
-        new_zoom = self.view_zoom * 1.25
-        if new_zoom <= 10.0:
-            self.view_zoom = new_zoom
+        z = self.view_zoom * 1.25
+        if z <= 10.0:
+            self.view_zoom = z
             self.update_display()
 
     def zoom_out(self):
-        """ズームアウト"""
-        new_zoom = self.view_zoom * 0.8
-        if new_zoom >= 0.1:
-            self.view_zoom = new_zoom
+        z = self.view_zoom * 0.8
+        if z >= 0.1:
+            self.view_zoom = z
             self.update_display()
 
     def set_zoom(self, level):
-        """ズームを指定倍率に設定"""
         self.view_zoom = level
         self.view_offset_x = 0
         self.view_offset_y = 0
         self.update_display()
 
-    def load_image(self):
-        """画像を読み込む"""
-        file_path = filedialog.askopenfilename(
-            title="画像を選択",
-            filetypes=[
-                ("画像ファイル", "*.png *.jpg *.jpeg *.bmp *.gif"),
-                ("すべてのファイル", "*.*")
-            ],
-            initialfile="image.png"
-        )
-
-        if file_path:
-            try:
-                self.image_path = file_path
-                self.original_image = cv2.imread(file_path, cv2.IMREAD_UNCHANGED)
-
-                if self.original_image is None:
-                    raise ValueError("画像を読み込めませんでした")
-
-                # BGRをRGBに変換（アルファチャンネルがある場合は保持）
-                if len(self.original_image.shape) == 3:
-                    if self.original_image.shape[2] == 4:
-                        self.original_image = cv2.cvtColor(self.original_image, cv2.COLOR_BGRA2RGBA)
-                    else:
-                        self.original_image = cv2.cvtColor(self.original_image, cv2.COLOR_BGR2RGB)
-
-                self.current_image = self.original_image.copy()
-                self.reset_all()
-                messagebox.showinfo("成功", "画像を読み込みました！")
-            except Exception as e:
-                messagebox.showerror("エラー", f"画像の読み込みに失敗しました:\n{str(e)}")
-
-    def save_image(self):
-        """画像を保存"""
-        if self.current_image is None:
-            messagebox.showwarning("警告", "保存する画像がありません")
-            return
-
-        file_path = filedialog.asksaveasfilename(
-            title="画像を保存",
-            defaultextension=".png",
-            filetypes=[
-                ("PNG画像", "*.png"),
-                ("JPEG画像", "*.jpg"),
-                ("すべてのファイル", "*.*")
-            ]
-        )
-
-        if file_path:
-            try:
-                # RGBをBGRに戻して保存
-                if len(self.current_image.shape) == 3:
-                    if self.current_image.shape[2] == 4:
-                        img_to_save = cv2.cvtColor(self.current_image, cv2.COLOR_RGBA2BGRA)
-                    else:
-                        img_to_save = cv2.cvtColor(self.current_image, cv2.COLOR_RGB2BGR)
-                else:
-                    img_to_save = self.current_image
-
-                cv2.imwrite(file_path, img_to_save)
-                messagebox.showinfo("成功", "画像を保存しました！")
-            except Exception as e:
-                messagebox.showerror("エラー", f"画像の保存に失敗しました:\n{str(e)}")
-
-    def on_transform_change(self, *args):
-        """変換パラメータが変更されたときの処理"""
-        if self.original_image is None:
-            return
-
-        self.apply_transform()
-
-    def apply_transform(self):
-        """現在のパラメータで変換を適用"""
-        if self.original_image is None:
-            return
-
-        # 変換行列を構築
-        h, w = self.original_image.shape[:2]
-
-        # 出力画像サイズを大きく確保（見切れを防ぐ）
-        output_w = w * 4
-        output_h = h * 4
-        output_center_x = output_w / 2
-        output_center_y = output_h / 2
-
-        # 1. 元画像の中心を出力画像の中心に移動
-        translate_to_output_center = np.array([
-            [1, 0, output_center_x - w / 2],
-            [0, 1, output_center_y - h / 2],
-            [0, 0, 1]
-        ])
-
-        # 2. 出力中心を原点に移動
-        translate_to_origin = np.array([
-            [1, 0, -output_center_x],
-            [0, 1, -output_center_y],
-            [0, 0, 1]
-        ])
-
-        # 3. スケール変換
-        scale_matrix = np.array([
-            [self.scale_x.get(), 0, 0],
-            [0, self.scale_y.get(), 0],
-            [0, 0, 1]
-        ])
-
-        # 4. 回転変換
-        angle_rad = math.radians(self.rotation.get())
-        cos_a, sin_a = math.cos(angle_rad), math.sin(angle_rad)
-        rotation_matrix = np.array([
-            [cos_a, -sin_a, 0],
-            [sin_a, cos_a, 0],
-            [0, 0, 1]
-        ])
-
-        # 5. シアー変換
-        shear_matrix = np.array([
-            [1, self.shear_x.get(), 0],
-            [self.shear_y.get(), 1, 0],
-            [0, 0, 1]
-        ])
-
-        # 6. 原点から出力中心に戻す
-        translate_back = np.array([
-            [1, 0, output_center_x],
-            [0, 1, output_center_y],
-            [0, 0, 1]
-        ])
-
-        # 全変換を合成（右から左へ適用）
-        # まず元画像を出力中心に配置 → 中心を原点に → 変換 → 中心に戻す
-        self.transform_matrix = translate_back @ shear_matrix @ rotation_matrix @ scale_matrix @ translate_to_origin @ translate_to_output_center
-
-        # OpenCV用の2x3行列に変換
-        transform_2x3 = self.transform_matrix[:2, :]
-
-        # 変換を適用
-        try:
-            self.current_image = cv2.warpAffine(
-                self.original_image,
-                transform_2x3,
-                (output_w, output_h),
-                flags=cv2.INTER_LINEAR,
-                borderMode=cv2.BORDER_CONSTANT,
-                borderValue=(0, 0, 0, 0) if len(self.original_image.shape) == 3 and self.original_image.shape[2] == 4 else (255, 255, 255)
-            )
-
-            self.update_display()
-            self.update_matrix_display()
-        except Exception as e:
-            print(f"変換エラー: {e}")
-
-    def update_display(self):
-        """キャンバスに画像を表示"""
-        if self.current_image is None:
-            return
-
-        self.canvas.delete('all')
-
-        # キャンバスのサイズを取得
-        self.canvas.update()
-        canvas_width = self.canvas.winfo_width()
-        canvas_height = self.canvas.winfo_height()
-
-        if canvas_width <= 1 or canvas_height <= 1:
-            canvas_width, canvas_height = 800, 600
-
-        # グリッドを描画（オプション）
-        if self.show_grid.get():
-            self.draw_grid(canvas_width, canvas_height)
-
-        # 画像をPIL形式に変換
-        if len(self.current_image.shape) == 3:
-            if self.current_image.shape[2] == 4:
-                pil_image = Image.fromarray(self.current_image, 'RGBA')
-            else:
-                pil_image = Image.fromarray(self.current_image, 'RGB')
-        else:
-            pil_image = Image.fromarray(self.current_image, 'L')
-
-        # 基本スケールを計算（画像全体が収まるように）
-        img_width, img_height = pil_image.size
-        base_scale = min(canvas_width / img_width, canvas_height / img_height, 1.0) * 0.3
-
-        # ビューズームを適用
-        final_scale = base_scale * self.view_zoom
-
-        new_width = int(img_width * final_scale)
-        new_height = int(img_height * final_scale)
-
-        pil_image = pil_image.resize((new_width, new_height), Image.Resampling.LANCZOS)
-
-        # Tkinter用に変換
-        self.display_image = ImageTk.PhotoImage(pil_image)
-
-        # キャンバスの中央に配置（ビューオフセットを適用）
-        x = (canvas_width - new_width) // 2 + self.view_offset_x
-        y = (canvas_height - new_height) // 2 + self.view_offset_y
-
-        self.canvas.create_image(x, y, anchor=tk.NW, image=self.display_image)
-
-        # ズームラベルを更新
-        pct = int(round(self.view_zoom * 100))
-        self.zoom_label.config(text=f"{pct}%")
-
-    def draw_grid(self, width, height):
-        """グリッドを描画"""
-        grid_size = 50
-
-        # 縦線
-        for x in range(0, width, grid_size):
-            self.canvas.create_line(x, 0, x, height, fill='#333333', width=1)
-
-        # 横線
-        for y in range(0, height, grid_size):
-            self.canvas.create_line(0, y, width, y, fill='#333333', width=1)
-
-        # 中央線（強調）
-        self.canvas.create_line(width // 2, 0, width // 2, height,
-                               fill='#4CAF50', width=2, dash=(5, 5))
-        self.canvas.create_line(0, height // 2, width, height // 2,
-                               fill='#4CAF50', width=2, dash=(5, 5))
-
-    def update_matrix_display(self):
-        """変換行列の表示を更新"""
-        self.matrix_text.delete('1.0', tk.END)
-        matrix_str = "[\n"
-        for row in self.transform_matrix[:2]:  # 2x3行列のみ表示
-            matrix_str += "  " + "  ".join([f"{x:7.3f}" for x in row]) + "\n"
-        matrix_str += "]"
-        self.matrix_text.insert('1.0', matrix_str)
-
-    def apply_custom_matrix(self):
-        """カスタム行列を適用"""
-        try:
-            matrix_str = self.matrix_text.get('1.0', tk.END)
-            # 簡易的なパース（改良の余地あり）
-            lines = [line.strip() for line in matrix_str.strip().strip('[]').split('\n') if line.strip()]
-
-            if len(lines) != 2:
-                raise ValueError("2行3列の行列を入力してください")
-
-            matrix_values = []
-            for line in lines:
-                values = [float(x) for x in line.replace('[', '').replace(']', '').split()]
-                if len(values) != 3:
-                    raise ValueError("各行は3つの値を含む必要があります")
-                matrix_values.append(values)
-
-            # 3x3行列に拡張
-            custom_matrix = np.array(matrix_values + [[0, 0, 1]])
-            self.transform_matrix = custom_matrix
-
-            # 変換を適用
-            if self.original_image is not None:
-                h, w = self.original_image.shape[:2]
-                output_w = w * 4
-                output_h = h * 4
-
-                # 元画像を出力画像の中心に配置するための変換を追加
-                output_center_x = output_w / 2
-                output_center_y = output_h / 2
-
-                translate_to_output_center = np.array([
-                    [1, 0, output_center_x - w / 2],
-                    [0, 1, output_center_y - h / 2],
-                    [0, 0, 1]
-                ])
-
-                # カスタム行列と配置変換を合成
-                final_matrix = self.transform_matrix @ translate_to_output_center
-                transform_2x3 = final_matrix[:2, :]
-
-                self.current_image = cv2.warpAffine(
-                    self.original_image,
-                    transform_2x3,
-                    (output_w, output_h),
-                    flags=cv2.INTER_LINEAR,
-                    borderMode=cv2.BORDER_CONSTANT,
-                    borderValue=(0, 0, 0, 0) if len(self.original_image.shape) == 3 and self.original_image.shape[2] == 4 else (255, 255, 255)
-                )
-
-                self.update_display()
-                messagebox.showinfo("成功", "カスタム行列を適用しました！")
-        except Exception as e:
-            messagebox.showerror("エラー", f"行列の適用に失敗しました:\n{str(e)}")
-
-    def reset_scale(self):
-        """スケールをリセット"""
-        self.scale_x.set(1.0)
-        self.scale_y.set(1.0)
-
-    def set_rotation(self, angle):
-        """回転角度を設定"""
-        self.rotation.set(angle)
-
-    def reset_all(self):
-        """すべてのパラメータをリセット"""
-        self.scale_x.set(1.0)
-        self.scale_y.set(1.0)
-        self.rotation.set(0.0)
-        self.shear_x.set(0.0)
-        self.shear_y.set(0.0)
-        self.transform_matrix = np.eye(3)
-
-        if self.original_image is not None:
-            self.current_image = self.original_image.copy()
-            self.reset_view()
-            self.update_display()
-            self.update_matrix_display()
-
-    def on_mouse_press(self, event):
-        """マウスボタンが押されたとき"""
-        self.drag_start_x = event.x
-        self.drag_start_y = event.y
-
-    def on_mouse_drag(self, event):
-        """マウスをドラッグしたとき"""
-        if self.current_image is None:
-            return
-
-        # ドラッグの移動量を計算
-        dx = event.x - self.drag_start_x
-        dy = event.y - self.drag_start_y
-
-        # ビューオフセットを更新
-        self.view_offset_x += dx
-        self.view_offset_y += dy
-
-        # 次のドラッグの開始点を更新
-        self.drag_start_x = event.x
-        self.drag_start_y = event.y
-
-        # 表示を更新
-        self.update_display()
-
-    def on_mouse_wheel(self, event):
-        """マウスホイール/トラックパッド2本指スクロール → ズーム"""
-        if self.current_image is None:
-            return
-
-        # macOSのトラックパッドでは delta が細かい値で来る
-        if event.num == 4 or event.delta > 0:
-            zoom_factor = 1.05
-        elif event.num == 5 or event.delta < 0:
-            zoom_factor = 0.95
-        else:
-            return
-
-        new_zoom = self.view_zoom * zoom_factor
-        if 0.1 <= new_zoom <= 10.0:
-            self.view_zoom = new_zoom
-            self.update_display()
-
-    def on_ctrl_scroll(self, event):
-        """Ctrl+スクロールでもズーム（ブラウザと同じ操作感）"""
-        if self.current_image is None:
-            return
-
-        if event.delta > 0:
-            zoom_factor = 1.15
-        elif event.delta < 0:
-            zoom_factor = 0.85
-        else:
-            return
-
-        new_zoom = self.view_zoom * zoom_factor
-        if 0.1 <= new_zoom <= 10.0:
-            self.view_zoom = new_zoom
-            self.update_display()
-
     def reset_view(self, event=None):
-        """ビュー（パン・ズーム）をリセット"""
         self.view_offset_x = 0
         self.view_offset_y = 0
         self.view_zoom = 1.0
         if self.current_image is not None:
             self.update_display()
 
-    def on_magnify(self, event):
-        """タッチパッドのピンチイン/アウトジェスチャー"""
+    def on_mouse_press(self, event):
+        self.drag_start_x = event.x
+        self.drag_start_y = event.y
+
+    def on_mouse_drag(self, event):
         if self.current_image is None:
             return
+        self.view_offset_x += event.x - self.drag_start_x
+        self.view_offset_y += event.y - self.drag_start_y
+        self.drag_start_x = event.x
+        self.drag_start_y = event.y
+        self.update_display()
 
-        # event.delta は拡大率の変化量（正:拡大、負:縮小）
-        # macOSではこの値が直接拡大率として使えます
-        zoom_factor = 1.0 + event.delta
+    def on_mouse_wheel(self, event):
+        if self.current_image is None:
+            return
+        if event.num == 4 or event.delta > 0:
+            f = 1.05
+        elif event.num == 5 or event.delta < 0:
+            f = 0.95
+        else:
+            return
+        z = self.view_zoom * f
+        if 0.1 <= z <= 10.0:
+            self.view_zoom = z
+            self.update_display()
 
-        # ズームを適用（0.1倍〜10倍の範囲）
-        new_zoom = self.view_zoom * zoom_factor
-        if 0.1 <= new_zoom <= 10.0:
-            self.view_zoom = new_zoom
+    def on_ctrl_scroll(self, event):
+        if self.current_image is None:
+            return
+        f = 1.15 if event.delta > 0 else 0.85
+        z = self.view_zoom * f
+        if 0.1 <= z <= 10.0:
+            self.view_zoom = z
+            self.update_display()
+
+    def on_magnify(self, event):
+        if self.current_image is None:
+            return
+        z = self.view_zoom * (1.0 + event.delta)
+        if 0.1 <= z <= 10.0:
+            self.view_zoom = z
             self.update_display()
 
     def on_rotate_gesture(self, event):
-        """タッチパッドの回転ジェスチャー（オプション機能）"""
         if self.current_image is None:
             return
+        r = self.rotation.get() + event.delta
+        while r > 180: r -= 360
+        while r < -180: r += 360
+        self.rotation.set(r)
 
-        # event.delta は回転角度（度）
-        # 現在の回転角度に追加
-        current_rotation = self.rotation.get()
-        new_rotation = current_rotation + event.delta
+    # ================================================================
+    # リセット
+    # ================================================================
 
-        # -180〜180の範囲に正規化
-        while new_rotation > 180:
-            new_rotation -= 360
-        while new_rotation < -180:
-            new_rotation += 360
+    def reset_scale(self):
+        self.scale_x.set(1.0)
+        self.scale_y.set(1.0)
 
-        self.rotation.set(new_rotation)
+    def set_rotation(self, angle):
+        self.rotation.set(angle)
+
+    def reset_all(self):
+        self.scale_x.set(1.0)
+        self.scale_y.set(1.0)
+        self.rotation.set(0.0)
+        self.shear_x.set(0.0)
+        self.shear_y.set(0.0)
+        self.transform_order = ['scale', 'rotation', 'shear']
+        self.rebuild_order_ui()
+        self.transform_matrix = np.eye(3)
+        for k in self.matrices:
+            self.matrices[k] = np.eye(3)
+
+        if self.original_image is not None:
+            self.current_image = self.original_image.copy()
+            self.reset_view()
+            self.update_all_matrix_labels()
+            self.update_display()
+            self.update_matrix_display()
 
 
 def main():
