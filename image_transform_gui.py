@@ -10,6 +10,7 @@ import numpy as np
 from PIL import Image, ImageTk, ImageDraw
 import cv2
 import math
+import re
 
 
 class ImageTransformGUI:
@@ -42,6 +43,9 @@ class ImageTransformGUI:
         self.view_zoom = 1.0
         self.drag_start_x = 0
         self.drag_start_y = 0
+
+        # スライダー更新の再帰防止フラグ
+        self._suppress_slider = False
 
         # UIの構築
         self.setup_ui()
@@ -134,6 +138,43 @@ class ImageTransformGUI:
                       bg='#363636', fg='#ffffff', selectcolor='#2b2b2b',
                       font=('Arial', 10)).pack(pady=5)
 
+    # ---------- 行列Entry共通作成 ----------
+    def create_matrix_entries(self, parent, key, color):
+        """2x2行列の個別Entryウィジェットを作成"""
+        mat_frame = tk.Frame(parent, bg='#363636')
+        mat_frame.pack(fill=tk.X, pady=(6, 0))
+
+        tk.Label(mat_frame, text="行列:", bg='#363636', fg='#aaa',
+                font=('Arial', 9)).pack(anchor=tk.W)
+
+        grid = tk.Frame(mat_frame, bg='#363636')
+        grid.pack(fill=tk.X, pady=2)
+
+        entries = [[None, None], [None, None]]
+        for r in range(2):
+            row_frame = tk.Frame(grid, bg='#363636')
+            row_frame.pack(fill=tk.X, pady=1)
+            tk.Label(row_frame, text="[" if r == 0 else "[",
+                    bg='#363636', fg=color, font=('Courier', 12)).pack(side=tk.LEFT)
+            for c in range(2):
+                e = tk.Entry(row_frame, width=10, bg='#2b2b2b', fg=color,
+                           font=('Courier', 11), relief=tk.FLAT,
+                           insertbackground=color, justify=tk.CENTER)
+                e.pack(side=tk.LEFT, padx=2)
+                entries[r][c] = e
+            tk.Label(row_frame, text="]",
+                    bg='#363636', fg=color, font=('Courier', 12)).pack(side=tk.LEFT)
+
+        tk.Label(mat_frame, text="√: ⌥V | sqrt(2), 1/sqrt(2) も可",
+                bg='#363636', fg='#888', font=('Arial', 8)).pack(anchor=tk.W)
+
+        tk.Button(mat_frame, text="行列を適用",
+                 command=lambda: self.apply_matrix_input(key),
+                 bg=color, fg='black', relief=tk.FLAT,
+                 font=('Arial', 9)).pack(fill=tk.X, pady=(2, 0))
+
+        return entries
+
     # ---------- スケール ----------
     def setup_scale_controls(self, parent):
         frame = tk.LabelFrame(parent, text="[S] スケール変換",
@@ -159,13 +200,7 @@ class ImageTransformGUI:
                 fg='#ffffff', highlightbackground='#363636',
                 troughcolor='#2b2b2b', length=250).pack(fill=tk.X)
 
-        # 個別行列入力（編集可能）
-        self.scale_matrix_text = tk.Text(frame, height=2, width=20, bg='#2b2b2b',
-            fg='#4FC3F7', font=('Courier', 10), relief=tk.FLAT, padx=5, pady=3)
-        self.scale_matrix_text.pack(fill=tk.X, pady=(4, 0))
-        tk.Button(frame, text="行列を適用", command=lambda: self.apply_matrix_input('scale'),
-                 bg='#4FC3F7', fg='black', relief=tk.FLAT,
-                 font=('Arial', 9)).pack(fill=tk.X, pady=(2, 0))
+        self.scale_entries = self.create_matrix_entries(frame, 'scale', '#4FC3F7')
 
     # ---------- 回転 ----------
     def setup_rotation_controls(self, parent):
@@ -191,12 +226,7 @@ class ImageTransformGUI:
                      bg='#555555', fg='black', relief=tk.FLAT,
                      font=('Arial', 8), width=5).pack(side=tk.LEFT, padx=2)
 
-        self.rotation_matrix_text = tk.Text(frame, height=2, width=20, bg='#2b2b2b',
-            fg='#81C784', font=('Courier', 10), relief=tk.FLAT, padx=5, pady=3)
-        self.rotation_matrix_text.pack(fill=tk.X, pady=(4, 0))
-        tk.Button(frame, text="行列を適用", command=lambda: self.apply_matrix_input('rotation'),
-                 bg='#81C784', fg='black', relief=tk.FLAT,
-                 font=('Arial', 9)).pack(fill=tk.X, pady=(2, 0))
+        self.rotation_entries = self.create_matrix_entries(frame, 'rotation', '#81C784')
 
     # ---------- シアー ----------
     def setup_shear_controls(self, parent):
@@ -223,12 +253,7 @@ class ImageTransformGUI:
                 fg='#ffffff', highlightbackground='#363636',
                 troughcolor='#2b2b2b', length=250).pack(fill=tk.X)
 
-        self.shear_matrix_text = tk.Text(frame, height=2, width=20, bg='#2b2b2b',
-            fg='#FFB74D', font=('Courier', 10), relief=tk.FLAT, padx=5, pady=3)
-        self.shear_matrix_text.pack(fill=tk.X, pady=(4, 0))
-        tk.Button(frame, text="行列を適用", command=lambda: self.apply_matrix_input('shear'),
-                 bg='#FFB74D', fg='black', relief=tk.FLAT,
-                 font=('Arial', 9)).pack(fill=tk.X, pady=(2, 0))
+        self.shear_entries = self.create_matrix_entries(frame, 'shear', '#FFB74D')
 
     # ---------- 適用順序 ----------
     def setup_order_controls(self, parent):
@@ -439,6 +464,8 @@ class ImageTransformGUI:
     # ================================================================
 
     def on_transform_change(self, *args):
+        if self._suppress_slider:
+            return
         if self.original_image is not None:
             self.apply_transform()
 
@@ -525,16 +552,19 @@ class ImageTransformGUI:
         transform_2x3 = self.transform_matrix[:2, :]
 
         try:
-            has_alpha = (len(self.original_image.shape) == 3 and
-                        self.original_image.shape[2] == 4)
-            border = (0, 0, 0, 0) if has_alpha else (200, 200, 200)
+            # RGBA変換して透明背景でワープ
+            src = self.original_image
+            if len(src.shape) == 2:
+                src = cv2.cvtColor(src, cv2.COLOR_GRAY2RGBA)
+            elif src.shape[2] == 3:
+                src = cv2.cvtColor(src, cv2.COLOR_RGB2RGBA)
 
             self.current_image = cv2.warpAffine(
-                self.original_image, transform_2x3,
+                src, transform_2x3,
                 (out_w, out_h),
                 flags=cv2.INTER_LINEAR,
                 borderMode=cv2.BORDER_CONSTANT,
-                borderValue=border)
+                borderValue=(0, 0, 0, 0))
 
             self.update_all_matrix_labels()
             self.update_matrix_display()
@@ -546,83 +576,88 @@ class ImageTransformGUI:
     # 行列表示更新
     # ================================================================
 
-    def fmt_matrix_2x2(self, m):
-        """2x2部分を見やすく表示"""
-        return (f"{m[0,0]:8.4f}  {m[0,1]:8.4f}\n"
-                f"{m[1,0]:8.4f}  {m[1,1]:8.4f}")
+    # ================================================================
+    # √対応の値パーサー
+    # ================================================================
 
-    def set_matrix_text(self, text_widget, content):
-        """Textウィジェットの内容を更新"""
-        text_widget.delete('1.0', tk.END)
-        text_widget.insert('1.0', content)
+    def parse_expr(self, text):
+        """√対応の数式パーサー。例: √2, 1/√2, -√3/2, √2/2"""
+        text = text.strip()
+        if not text:
+            return 0.0
+        # √N → sqrt(N) に置換
+        text = re.sub(r'√(\d+\.?\d*)', r'sqrt(\1)', text)
+        # 安全な評価
+        allowed = {"__builtins__": {}, "sqrt": math.sqrt, "pi": math.pi}
+        return float(eval(text, allowed))
+
+    # ================================================================
+    # Entry操作
+    # ================================================================
+
+    def set_entry_value(self, entry, value):
+        """Entryウィジェットの値を設定"""
+        entry.delete(0, tk.END)
+        # きれいな数値表示
+        if abs(value - round(value)) < 1e-9:
+            entry.insert(0, str(int(round(value))))
+        else:
+            entry.insert(0, f"{value:.4f}")
+
+    def get_entries(self, key):
+        """キーに対応するエントリ2x2リストを返す"""
+        return {'scale': self.scale_entries,
+                'rotation': self.rotation_entries,
+                'shear': self.shear_entries}[key]
 
     def update_all_matrix_labels(self):
-        self.set_matrix_text(self.scale_matrix_text, self.fmt_matrix_2x2(self.matrices['scale']))
-        self.set_matrix_text(self.rotation_matrix_text, self.fmt_matrix_2x2(self.matrices['rotation']))
-        self.set_matrix_text(self.shear_matrix_text, self.fmt_matrix_2x2(self.matrices['shear']))
-
-    def parse_2x2_text(self, text_widget):
-        """Textウィジェットから2x2行列を解析"""
-        txt = text_widget.get('1.0', tk.END).strip()
-        # パイプ文字や括弧を除去
-        txt = txt.replace('|', '').replace('[', '').replace(']', '')
-        lines = [l.strip() for l in txt.split('\n') if l.strip()]
-        if len(lines) != 2:
-            raise ValueError("2x2行列を入力してください（2行）")
-        vals = []
-        for l in lines:
-            v = [float(x) for x in l.split()]
-            if len(v) != 2:
-                raise ValueError("各行は2つの値が必要です")
-            vals.append(v)
-        return np.array(vals)
+        """スライダー値から各エントリを更新"""
+        for key in ['scale', 'rotation', 'shear']:
+            entries = self.get_entries(key)
+            m = self.matrices[key]
+            for r in range(2):
+                for c in range(2):
+                    self.set_entry_value(entries[r][c], m[r, c])
 
     def apply_matrix_input(self, key):
-        """各変換の行列テキストを解析して適用"""
-        text_widgets = {
-            'scale': self.scale_matrix_text,
-            'rotation': self.rotation_matrix_text,
-            'shear': self.shear_matrix_text,
-        }
+        """各変換のEntryから行列を読み取って適用"""
+        entries = self.get_entries(key)
         try:
-            m2x2 = self.parse_2x2_text(text_widgets[key])
-            # 3x3行列に変換
+            vals = [[self.parse_expr(entries[r][c].get()) for c in range(2)] for r in range(2)]
+            m2x2 = np.array(vals)
             self.matrices[key] = np.array([
                 [m2x2[0, 0], m2x2[0, 1], 0],
                 [m2x2[1, 0], m2x2[1, 1], 0],
                 [0, 0, 1]
             ])
-            # スライダーを行列値に同期（可能な範囲で）
             self._sync_sliders_from_matrix(key, m2x2)
-            # 変換を再適用（スライダー経由ではなく直接）
             self._apply_from_matrices()
         except Exception as e:
             messagebox.showerror("エラー", f"行列の解析に失敗:\n{e}")
 
     def _sync_sliders_from_matrix(self, key, m2x2):
-        """行列値からスライダーを逆算して同期"""
-        if key == 'scale':
-            sx = m2x2[0, 0]
-            sy = m2x2[1, 1]
-            if 0.1 <= sx <= 3.0:
-                self.scale_x.set(round(sx, 2))
-            if 0.1 <= sy <= 3.0:
-                self.scale_y.set(round(sy, 2))
-        elif key == 'rotation':
-            # cos, sinから角度を逆算
-            cos_val = m2x2[0, 0]
-            sin_val = m2x2[1, 0]
-            angle_rad = math.atan2(sin_val, cos_val)
-            angle_deg = math.degrees(angle_rad)
-            if -180 <= angle_deg <= 180:
-                self.rotation.set(round(angle_deg))
-        elif key == 'shear':
-            hx = m2x2[0, 1]
-            hy = m2x2[1, 0]
-            if -2.0 <= hx <= 2.0:
-                self.shear_x.set(round(hx, 2))
-            if -2.0 <= hy <= 2.0:
-                self.shear_y.set(round(hy, 2))
+        """行列値からスライダーを逆算して同期（コールバック抑制付き）"""
+        self._suppress_slider = True
+        try:
+            if key == 'scale':
+                sx, sy = m2x2[0, 0], m2x2[1, 1]
+                if 0.1 <= sx <= 3.0:
+                    self.scale_x.set(sx)
+                if 0.1 <= sy <= 3.0:
+                    self.scale_y.set(sy)
+            elif key == 'rotation':
+                cos_val, sin_val = m2x2[0, 0], m2x2[1, 0]
+                angle_deg = math.degrees(math.atan2(sin_val, cos_val))
+                if -180 <= angle_deg <= 180:
+                    self.rotation.set(angle_deg)
+            elif key == 'shear':
+                hx, hy = m2x2[0, 1], m2x2[1, 0]
+                if -2.0 <= hx <= 2.0:
+                    self.shear_x.set(hx)
+                if -2.0 <= hy <= 2.0:
+                    self.shear_y.set(hy)
+        finally:
+            self._suppress_slider = False
 
     def _apply_from_matrices(self):
         """self.matricesの現在値をそのまま合成して変換を適用"""
@@ -648,16 +683,18 @@ class ImageTransformGUI:
         transform_2x3 = self.transform_matrix[:2, :]
 
         try:
-            has_alpha = (len(self.original_image.shape) == 3 and
-                        self.original_image.shape[2] == 4)
-            border = (0, 0, 0, 0) if has_alpha else (200, 200, 200)
+            src = self.original_image
+            if len(src.shape) == 2:
+                src = cv2.cvtColor(src, cv2.COLOR_GRAY2RGBA)
+            elif src.shape[2] == 3:
+                src = cv2.cvtColor(src, cv2.COLOR_RGB2RGBA)
 
             self.current_image = cv2.warpAffine(
-                self.original_image, transform_2x3,
+                src, transform_2x3,
                 (out_w, out_h),
                 flags=cv2.INTER_LINEAR,
                 borderMode=cv2.BORDER_CONSTANT,
-                borderValue=border)
+                borderValue=(0, 0, 0, 0))
 
             self.update_matrix_display()
             self.update_display()
@@ -691,12 +728,15 @@ class ImageTransformGUI:
                 offset = np.array([[1, 0, -min_x], [0, 1, -min_y], [0, 0, 1]])
                 final = offset @ custom
                 t2x3 = final[:2, :]
-                has_alpha = (len(self.original_image.shape) == 3 and
-                            self.original_image.shape[2] == 4)
+                src = self.original_image
+                if len(src.shape) == 2:
+                    src = cv2.cvtColor(src, cv2.COLOR_GRAY2RGBA)
+                elif src.shape[2] == 3:
+                    src = cv2.cvtColor(src, cv2.COLOR_RGB2RGBA)
                 self.current_image = cv2.warpAffine(
-                    self.original_image, t2x3, (out_w, out_h),
+                    src, t2x3, (out_w, out_h),
                     flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT,
-                    borderValue=(0,0,0,0) if has_alpha else (200,200,200))
+                    borderValue=(0, 0, 0, 0))
                 self.transform_matrix = final
                 self.update_display()
         except Exception as e:

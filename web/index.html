@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>画像行列変換ツール - Matrix Transform Studio</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="app">
+  <!-- 左パネル -->
+  <div class="left-panel">
+    <div class="left-scroll">
+      <h2 class="panel-header">変換コントロール</h2>
+
+      <!-- ファイル操作 -->
+      <fieldset class="section">
+        <legend>ファイル</legend>
+        <button class="btn btn-green" id="btn-open">画像を開く</button>
+        <input type="file" id="file-input" accept="image/*" hidden>
+        <button class="btn btn-blue" id="btn-save">画像を保存</button>
+      </fieldset>
+
+      <!-- スケール -->
+      <fieldset class="section" id="section-scale">
+        <legend class="color-scale">[S] スケール変換</legend>
+        <label class="slider-label">X:</label>
+        <input type="range" class="slider" id="scale-x" min="0.1" max="3" step="0.05" value="1">
+        <span class="slider-val" id="scale-x-val">1.00</span>
+        <label class="slider-label">Y:</label>
+        <input type="range" class="slider" id="scale-y" min="0.1" max="3" step="0.05" value="1">
+        <span class="slider-val" id="scale-y-val">1.00</span>
+        <div class="matrix-section">
+          <span class="matrix-label">行列:</span>
+          <div class="matrix-grid">
+            <div class="matrix-row">
+              <span class="bracket color-scale">[</span>
+              <input class="matrix-entry color-scale" id="s00" value="1">
+              <input class="matrix-entry color-scale" id="s01" value="0">
+              <span class="bracket color-scale">]</span>
+            </div>
+            <div class="matrix-row">
+              <span class="bracket color-scale">[</span>
+              <input class="matrix-entry color-scale" id="s10" value="0">
+              <input class="matrix-entry color-scale" id="s11" value="1">
+              <span class="bracket color-scale">]</span>
+            </div>
+          </div>
+          <span class="hint">√: ⌥V | sqrt(2), 1/sqrt(2) も可</span>
+          <button class="btn btn-apply btn-apply-scale" data-key="scale">行列を適用</button>
+        </div>
+      </fieldset>
+
+      <!-- 回転 -->
+      <fieldset class="section" id="section-rotation">
+        <legend class="color-rotation">[R] 回転変換</legend>
+        <label class="slider-label">角度(度):</label>
+        <input type="range" class="slider" id="rotation" min="-180" max="180" step="1" value="0">
+        <span class="slider-val" id="rotation-val">0</span>
+        <div class="preset-buttons">
+          <button class="btn btn-preset" data-angle="90">90°</button>
+          <button class="btn btn-preset" data-angle="120">120°</button>
+          <button class="btn btn-preset" data-angle="180">180°</button>
+          <button class="btn btn-preset" data-angle="270">270°</button>
+        </div>
+        <div class="matrix-section">
+          <span class="matrix-label">行列:</span>
+          <div class="matrix-grid">
+            <div class="matrix-row">
+              <span class="bracket color-rotation">[</span>
+              <input class="matrix-entry color-rotation" id="r00" value="1">
+              <input class="matrix-entry color-rotation" id="r01" value="0">
+              <span class="bracket color-rotation">]</span>
+            </div>
+            <div class="matrix-row">
+              <span class="bracket color-rotation">[</span>
+              <input class="matrix-entry color-rotation" id="r10" value="0">
+              <input class="matrix-entry color-rotation" id="r11" value="1">
+              <span class="bracket color-rotation">]</span>
+            </div>
+          </div>
+          <span class="hint">√: ⌥V | sqrt(2), 1/sqrt(2) も可</span>
+          <button class="btn btn-apply btn-apply-rotation" data-key="rotation">行列を適用</button>
+        </div>
+      </fieldset>
+
+      <!-- シアー -->
+      <fieldset class="section" id="section-shear">
+        <legend class="color-shear">[H] シアー変換（せん断）</legend>
+        <label class="slider-label">X方向:</label>
+        <input type="range" class="slider" id="shear-x" min="-2" max="2" step="0.05" value="0">
+        <span class="slider-val" id="shear-x-val">0.00</span>
+        <label class="slider-label">Y方向:</label>
+        <input type="range" class="slider" id="shear-y" min="-2" max="2" step="0.05" value="0">
+        <span class="slider-val" id="shear-y-val">0.00</span>
+        <div class="matrix-section">
+          <span class="matrix-label">行列:</span>
+          <div class="matrix-grid">
+            <div class="matrix-row">
+              <span class="bracket color-shear">[</span>
+              <input class="matrix-entry color-shear" id="h00" value="1">
+              <input class="matrix-entry color-shear" id="h01" value="0">
+              <span class="bracket color-shear">]</span>
+            </div>
+            <div class="matrix-row">
+              <span class="bracket color-shear">[</span>
+              <input class="matrix-entry color-shear" id="h10" value="0">
+              <input class="matrix-entry color-shear" id="h11" value="1">
+              <span class="bracket color-shear">]</span>
+            </div>
+          </div>
+          <span class="hint">√: ⌥V | sqrt(2), 1/sqrt(2) も可</span>
+          <button class="btn btn-apply btn-apply-shear" data-key="shear">行列を適用</button>
+        </div>
+      </fieldset>
+
+      <!-- 適用順序 -->
+      <fieldset class="section">
+        <legend>適用順序（上から順に適用）</legend>
+        <div id="order-list"></div>
+      </fieldset>
+
+      <!-- 合成変換行列 -->
+      <fieldset class="section">
+        <legend>合成変換行列</legend>
+        <textarea id="combined-matrix" rows="3" class="combined-matrix"></textarea>
+        <button class="btn btn-purple" id="btn-apply-combined">行列を直接適用</button>
+      </fieldset>
+
+      <!-- リセット -->
+      <button class="btn btn-red btn-reset" id="btn-reset">すべてリセット</button>
+
+      <!-- グリッド -->
+      <label class="grid-toggle">
+        <input type="checkbox" id="show-grid" checked> グリッド表示
+      </label>
+    </div>
+  </div>
+
+  <!-- 右パネル -->
+  <div class="right-panel">
+    <div class="preview-header">
+      <span class="preview-title">プレビュー</span>
+      <span class="preview-hint">ドラッグ:移動 | スクロール:拡大縮小 | 右クリック:リセット</span>
+    </div>
+    <div class="canvas-wrap">
+      <canvas id="preview"></canvas>
+    </div>
+    <div class="zoom-bar">
+      <button class="btn btn-small" id="btn-fit">Fit</button>
+      <div class="zoom-right">
+        <button class="btn btn-small" id="btn-zoom-out"> - </button>
+        <button class="btn btn-small btn-pct" data-zoom="0.25">25%</button>
+        <button class="btn btn-small btn-pct" data-zoom="0.5">50%</button>
+        <button class="btn btn-small btn-pct" data-zoom="1">100%</button>
+        <button class="btn btn-small btn-pct" data-zoom="2">200%</button>
+        <button class="btn btn-small" id="btn-zoom-in"> + </button>
+        <span class="zoom-label" id="zoom-label">100%</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>

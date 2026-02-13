@@ -1,0 +1,287 @@
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  background: #2b2b2b;
+  color: #fff;
+  font-family: Arial, sans-serif;
+  overflow: hidden;
+  height: 100vh;
+}
+
+.app {
+  display: flex;
+  height: 100vh;
+  padding: 10px;
+  gap: 10px;
+}
+
+/* ===== 左パネル ===== */
+.left-panel {
+  width: 340px;
+  min-width: 340px;
+  background: #363636;
+  border-radius: 6px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.left-scroll {
+  overflow-y: auto;
+  padding: 10px;
+  flex: 1;
+}
+.left-scroll::-webkit-scrollbar { width: 8px; }
+.left-scroll::-webkit-scrollbar-track { background: #363636; }
+.left-scroll::-webkit-scrollbar-thumb { background: #555; border-radius: 4px; }
+
+.panel-header {
+  text-align: center;
+  font-size: 16px;
+  margin-bottom: 10px;
+}
+
+/* ===== セクション ===== */
+.section {
+  border: 1px solid #555;
+  border-radius: 4px;
+  padding: 10px;
+  margin-bottom: 8px;
+}
+.section legend {
+  font-size: 12px;
+  font-weight: bold;
+  padding: 0 6px;
+}
+
+/* ===== カラー ===== */
+.color-scale { color: #4FC3F7; }
+.color-rotation { color: #81C784; }
+.color-shear { color: #FFB74D; }
+
+/* ===== ボタン ===== */
+.btn {
+  display: block;
+  width: 100%;
+  padding: 6px 12px;
+  border: none;
+  border-radius: 4px;
+  font-size: 13px;
+  cursor: pointer;
+  margin: 3px 0;
+  color: #000;
+}
+.btn-green { background: #4CAF50; }
+.btn-blue { background: #2196F3; }
+.btn-red { background: #f44336; font-size: 15px; font-weight: bold; padding: 10px; }
+.btn-purple { background: #9C27B0; }
+.btn-apply-scale { background: #4FC3F7; }
+.btn-apply-rotation { background: #81C784; }
+.btn-apply-shear { background: #FFB74D; }
+.btn-preset {
+  display: inline-block;
+  width: auto;
+  padding: 3px 10px;
+  background: #555;
+  font-size: 11px;
+  margin: 2px;
+}
+.btn-small {
+  display: inline-block;
+  width: auto;
+  padding: 4px 8px;
+  background: #555;
+  font-size: 12px;
+  margin: 0 2px;
+}
+.btn-pct { background: #444; font-size: 11px; }
+.btn:hover { filter: brightness(1.15); }
+
+.btn-reset { margin-top: 10px; }
+
+/* ===== スライダー ===== */
+.slider-label {
+  display: block;
+  font-size: 11px;
+  margin-top: 4px;
+  color: #ccc;
+}
+.slider {
+  width: calc(100% - 50px);
+  vertical-align: middle;
+  accent-color: #4a4a4a;
+}
+.slider-val {
+  display: inline-block;
+  width: 44px;
+  text-align: right;
+  font-size: 11px;
+  color: #aaa;
+  vertical-align: middle;
+}
+
+/* ===== 行列入力 ===== */
+.matrix-section {
+  margin-top: 6px;
+}
+.matrix-label {
+  font-size: 11px;
+  color: #aaa;
+}
+.matrix-grid {
+  margin: 4px 0;
+}
+.matrix-row {
+  display: flex;
+  align-items: center;
+  margin: 2px 0;
+}
+.bracket {
+  font-family: 'Courier New', monospace;
+  font-size: 16px;
+  width: 12px;
+  text-align: center;
+}
+.matrix-entry {
+  width: 90px;
+  padding: 4px 6px;
+  margin: 0 3px;
+  background: #2b2b2b;
+  border: none;
+  border-radius: 3px;
+  font-family: 'Courier New', monospace;
+  font-size: 13px;
+  text-align: center;
+  outline: none;
+}
+.matrix-entry:focus {
+  box-shadow: 0 0 0 1px currentColor;
+}
+.hint {
+  display: block;
+  font-size: 10px;
+  color: #888;
+  margin: 2px 0;
+}
+
+/* ===== プリセットボタン ===== */
+.preset-buttons {
+  margin: 4px 0;
+}
+
+/* ===== 適用順序 ===== */
+.order-row {
+  display: flex;
+  align-items: center;
+  padding: 3px 0;
+}
+.order-num {
+  width: 20px;
+  font-weight: bold;
+  color: #aaa;
+  font-size: 12px;
+}
+.order-name {
+  flex: 1;
+  font-weight: bold;
+  font-size: 12px;
+}
+.order-btns {
+  display: flex;
+  gap: 4px;
+}
+.order-btn {
+  background: #555;
+  border: none;
+  color: #000;
+  padding: 2px 8px;
+  border-radius: 3px;
+  cursor: pointer;
+  font-size: 11px;
+}
+.order-btn:hover { filter: brightness(1.2); }
+.order-btn.invisible { visibility: hidden; }
+
+/* ===== 合成行列 ===== */
+.combined-matrix {
+  width: 100%;
+  background: #2b2b2b;
+  color: #0f0;
+  border: none;
+  border-radius: 4px;
+  padding: 6px;
+  font-family: 'Courier New', monospace;
+  font-size: 12px;
+  resize: none;
+  margin: 4px 0;
+  outline: none;
+}
+
+/* ===== グリッド表示 ===== */
+.grid-toggle {
+  display: block;
+  text-align: center;
+  padding: 8px;
+  font-size: 13px;
+  cursor: pointer;
+  user-select: none;
+}
+.grid-toggle input { margin-right: 6px; }
+
+/* ===== 右パネル ===== */
+.right-panel {
+  flex: 1;
+  background: #363636;
+  border-radius: 6px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.preview-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 16px;
+}
+.preview-title {
+  font-size: 16px;
+  font-weight: bold;
+}
+.preview-hint {
+  font-size: 11px;
+  color: #aaa;
+}
+.canvas-wrap {
+  flex: 1;
+  margin: 0 10px;
+  background: #1e1e1e;
+  border-radius: 4px;
+  overflow: hidden;
+  position: relative;
+}
+.canvas-wrap canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* ===== ズームバー ===== */
+.zoom-bar {
+  display: flex;
+  align-items: center;
+  padding: 6px 10px 10px;
+  gap: 8px;
+}
+.zoom-right {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.zoom-label {
+  font-size: 13px;
+  font-weight: bold;
+  color: #4CAF50;
+  margin-left: 8px;
+  min-width: 50px;
+  text-align: right;
+}
